@@ -40,6 +40,7 @@ def model_forecast(model, series, window_size):
 
 def create_time_steps(length):
   return list(range(-length, 0))
+
 def show_plot(plot_data, delta, title):
   labels = ['History', 'True Future', 'Model Prediction']
   marker = ['.-', 'rx', 'go']
@@ -61,23 +62,19 @@ def show_plot(plot_data, delta, title):
   plt.xlabel('Time-Step')
   return plt
 
-
 def listfiles(path):
     files = glob.glob(path+'\\*')
     return files 
-
-# files = listfiles('D:\\gits\\stock\\code\\data')
-
 
 def readfile(file,col_to_read):
     df =  pd.read_csv(file)
     df = df[col_to_read]
     return df
 
-col_to_read = ['openPrice','turnoverVol']
-df = readfile(files[-1],col_to_read)
+def run_md(file): 
 
-def run_md(df):
+    df = readfile(file,col_to_read)
+    ss = file.split('\\')[-1][:-4]
     series = df['openPrice'].to_numpy()
     time = np.array(df.index)
     plt.figure(figsize=(10, 6))
@@ -92,7 +89,7 @@ def run_md(df):
     window_size = 30
     batch_size = 32
     shuffle_buffer_size = 1000
-    BATCH_SIZE = 128
+    BATCH_SIZE = 32
     BUFFER_SIZE = 10000
     
     # model 1 
@@ -125,7 +122,7 @@ def run_md(df):
     model.compile(loss=tf.keras.losses.Huber(),
                   optimizer=optimizer,
                   metrics=["mae"])
-    history = model.fit(train_set,epochs=50,verbose=1)
+    history = model.fit(train_set,epochs=50,verbose=0)
     # run focast 
     rnn_forecast = model_forecast(model, series[..., np.newaxis], window_size)
     rnn_forecast = rnn_forecast[split_time - window_size:-1,-1, 0]
@@ -134,9 +131,173 @@ def run_md(df):
     plt.figure(figsize=(10, 6))
     plot_series(time_valid, x_valid)
     plot_series(time_valid, rnn_forecast)
-    
+    plt.legend()
+    plt.savefig('plt\\plt_hist_%s'%ss)
+
     plt.figure()
     plt.plot(history.history['loss'])
+    plt.savefig('plt\\plt_%s.png'%ss)
+
+def multivariate_data(dataset, target, start_index, end_index, history_size,
+                      target_size, step, single_step=False):
+  data = []
+  labels = []
+
+  start_index = start_index + history_size
+  if end_index is None:
+    end_index = len(dataset) - target_size
+
+  for i in range(start_index, end_index):
+    indices = range(i-history_size, i, step)
+    data.append(dataset[indices])
+
+    if single_step:
+      labels.append(target[i+target_size])
+    else:
+      labels.append(target[i:i+target_size])
+
+  return np.array(data), np.array(labels)
+
+
+  
+
+#$$$$$$$$$$$$$$$$$$$$$$$$$
+  
+def multi_md(file):
+    df = pd.read_csv(file)
+    ss = file.split('\\')[-1][:-4]
+    TRAIN_SPLIT = 1000
+    features_considered = ['openPrice', 'turnoverVol']
+    features = df[features_considered]
+    features.index = df['tradeDate']
+
+    dataset = features.values
+    data_mean = dataset[:TRAIN_SPLIT].mean(axis=0)
+    data_std = dataset[:TRAIN_SPLIT].std(axis=0)
+    dataset = (dataset-data_mean)/data_std
+    
+    # Single step model
+    def multivariate_data(dataset, target, start_index, end_index, history_size,
+                          target_size, step, single_step=False):
+      data = []
+      labels = []
+    
+      start_index = start_index + history_size
+      if end_index is None:
+        end_index = len(dataset) - target_size
+    
+      for i in range(start_index, end_index):
+        indices = range(i-history_size, i, step)
+        data.append(dataset[indices])
+    
+        if single_step:
+          labels.append(target[i+target_size])
+        else:
+          labels.append(target[i:i+target_size])
+    
+      return np.array(data), np.array(labels)
     
     
-run_md(df)
+    past_history = 60
+    future_target = 7
+    STEP = 1
+    
+    
+    # multistep model 
+    future_target = 7
+    x_train_multi, y_train_multi = multivariate_data(dataset, dataset[:, 1], 0,
+                                                     TRAIN_SPLIT, past_history,
+                                                     future_target, STEP)
+    x_val_multi, y_val_multi = multivariate_data(dataset, dataset[:, 1],
+                                                 TRAIN_SPLIT, None, past_history,
+                                                 future_target, STEP)
+    
+    train_data_multi = tf.data.Dataset.from_tensor_slices((x_train_multi, y_train_multi))
+    train_data_multi = train_data_multi.cache().shuffle(BUFFER_SIZE).batch(BATCH_SIZE).repeat()
+    
+    val_data_multi = tf.data.Dataset.from_tensor_slices((x_val_multi, y_val_multi))
+    val_data_multi = val_data_multi.batch(BATCH_SIZE).repeat()
+    
+    def rev(ds):
+        return ds*data_std+data_mean
+    
+    def multi_step_plot(history, true_future, prediction,ss): 
+        
+      plt.figure(figsize=(12, 6))
+      num_in = create_time_steps(len(history))
+      num_out = len(true_future)
+    
+      plt.plot(num_in, np.array(history[:, 1]), label='History')
+      plt.plot(np.arange(num_out)/STEP, np.array(true_future), 'bo',
+               label='True Future')
+      if prediction.any():
+        plt.plot(np.arange(num_out)/STEP, np.array(prediction), 'ro',
+                 label='Predicted Future')
+      plt.legend(loc='upper left')
+      plt.savefig('plt_pred_%s.png'%ss)
+      plt.show()
+      print('Success plt %s' %ss)
+      
+    
+      
+      
+    # multistep model 
+      
+    multi_step_model = tf.keras.models.Sequential()
+    multi_step_model.add(tf.keras.layers.LSTM(16,
+                                              return_sequences=True,
+                                              input_shape=x_train_multi.shape[-2:]))
+    multi_step_model.add(tf.keras.layers.LSTM(16, activation='relu'))
+    multi_step_model.add(tf.keras.layers.Dense(7))
+    
+    multi_step_model.compile(optimizer=tf.keras.optimizers.RMSprop(clipvalue=1.0), loss='mse')
+    EVALUATION_INTERVAL = 200
+    EPOCHS = 20
+    multi_step_history = multi_step_model.fit(train_data_multi, epochs=EPOCHS,
+                                              steps_per_epoch=EVALUATION_INTERVAL,
+                                              validation_data=val_data_multi,
+                                              validation_steps=50,verbose=1)
+    
+    def plot_train_history(history, title,ss):
+      loss = history.history['loss']
+      val_loss = history.history['val_loss']
+    
+      epochs = range(len(loss))
+    
+      plt.figure()
+    
+      plt.plot(epochs, loss, 'b', label='Training loss')
+      plt.plot(epochs, val_loss, 'r', label='Validation loss')
+      plt.title(title)
+      plt.ylim([0,5])
+      plt.legend()
+      plt.savefig('plt\\plt_pred7_hist_%s.png'%ss)
+      plt.show()
+      
+    plot_train_history(multi_step_history,
+                       'Single Step Training and validation loss',ss)
+    
+    for x, y in val_data_multi.take(1):
+      multi_step_plot(x[0], y[0], multi_step_model.predict(x)[0],ss)
+      
+
+#$$$$$$$$$$$$$$$$$$$$$$$$$
+
+# =============================================================================
+# This is the section of main file execution
+# =============================================================================   
+global col_to_read
+col_to_read = ['openPrice','turnoverVol']
+
+files = listfiles('D:\\gits\\stock\\code\\data')
+file = files[-1]
+
+window_size = 30
+batch_size = 32
+shuffle_buffer_size = 1000
+BATCH_SIZE = 32
+BUFFER_SIZE = 10000
+for file in files[5:]:
+    print('run %s file' %file)
+    # run_md(file)
+    multi_md(file)

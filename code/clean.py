@@ -62,7 +62,7 @@ def show_plot(plot_data, delta, title):
 
 
 
-df = pd.read_csv('maotai_600519.csv')
+df = pd.read_csv('data\\600519.csv')
 
 series = df['openPrice'].to_numpy()
 time = np.array(df.index)
@@ -128,7 +128,15 @@ plt.plot(history.history['loss'])
 
 
 #------------------------------------------------------------------------------
-
+TRAIN_SPLIT = 1000
+features_considered = ['openPrice', 'turnoverVol']
+features = df[features_considered]
+features.index = df['tradeDate']
+features.head()
+dataset = features.values
+data_mean = dataset[:TRAIN_SPLIT].mean(axis=0)
+data_std = dataset[:TRAIN_SPLIT].std(axis=0)
+dataset = (dataset-data_mean)/data_std
 
 # Single step model
 def multivariate_data(dataset, target, start_index, end_index, history_size,
